@@ -56,7 +56,7 @@ Use store/screenshot-toast.png and store/screenshot-onboarding.png (1280x800).
 
 ## Promotional image
 
-Use store/promo-440x280.png (440x280). The full-resolution banner for GitHub is store/promo-1760x1120.png.
+Use store/promo-440x280.png (440x280) for the small tile and store/promo-1400x560.png (1400x560) for the marquee. The full-resolution banner for GitHub is store/promo-1760x1120.png.
 
 ## Single purpose
 
