@@ -1,163 +1,126 @@
-import {
-  OFFSCREEN_PATH,
-  confirmationFor,
-  resolveActiveUrl,
-  shouldCreateOffscreen,
-} from "./core.js";
+import { OFFSCREEN_PATH, confirmationFor, markdownLink, resolveActiveUrl, shouldCreateOffscreen } from "./core.js";
+import { DEFAULT_PREFERENCES, readPreferences } from "./preferences.js";
 import { runPageCopy } from "./page-copy.js";
 
 let offscreenCreate = null;
 let offscreenQueue = Promise.resolve();
-let badgeTimer = 0;
+const badgeTimers = new Map();
 
-export async function copyActiveUrl(tabHint) {
+export async function copyActiveUrl(tabHint, { format = "url" } = {}) {
   const tab = await resolveTab(tabHint);
   const tabId = tab?.id;
   const tabUrl = typeof tab?.url === "string" ? tab.url : "";
+  const preferences = await readPreferences().catch(() => DEFAULT_PREFERENCES);
+  const options = { format, confirmation: preferences.confirmation, titleHint: tab?.title || "" };
+  const injected = typeof tabId === "number" ? await injectPageCopy(tabId, tabUrl, false, options) : null;
+  const url = resolveActiveUrl({ pageHref: injected?.url, tabUrl });
+  let copied = Boolean(injected?.copied);
+  let toasted = Boolean(injected?.toasted);
 
-  let pageHref = "";
-  let copied = false;
-  let injectionSucceeded = false;
-
-  if (typeof tabId === "number") {
-    const injected = await injectPageCopy(tabId, tabUrl, false);
-    if (injected) {
-      injectionSucceeded = true;
-      pageHref = injected.url;
-      copied = injected.copied;
+  if (!copied && url) {
+    const text = injected?.text || (format === "markdown" ? markdownLink(url, tab?.title || "") : url);
+    copied = await copyWithOffscreen(text);
+    if (copied && injected && typeof tabId === "number") {
+      const result = await injectPageCopy(tabId, url, true, options);
+      toasted = Boolean(result?.toasted);
     }
   }
-
-  const url = resolveActiveUrl({ pageHref, tabUrl });
 
   if (!copied) {
-    if (!url) {
-      await flashBadge("!");
-      return { copied: false, url: null, confirmation: "error-badge" };
+    if (injected && typeof tabId === "number") {
+      await injectPageCopy(tabId, url || "", true, { ...options, error: true });
     }
-    copied = await copyWithOffscreen(url);
-    if (copied && injectionSucceeded && typeof tabId === "number") {
-      const toasted = await injectPageCopy(tabId, url, true);
-      injectionSucceeded = Boolean(toasted?.toasted);
-    }
+    await chrome.storage.session.set({ copyError: { tabId: tabId ?? null } }).catch(() => {});
+    await flashBadge("!", tabId, "Couldn’t copy — open Copy URL to try again.");
+    return { copied: false, url, confirmation: "error-badge" };
   }
 
-  const confirmation = confirmationFor({ copied, injectionSucceeded });
-  if (confirmation === "badge") {
-    await flashBadge("✓");
-  } else if (confirmation === "error-badge") {
-    await flashBadge("!");
-  }
+  const confirmation = confirmationFor({ copied, injectionSucceeded: toasted });
+  const { copyError } = await chrome.storage.session.get("copyError").catch(() => ({}));
+  if (copyError?.tabId === tabId || copyError?.tabId === null) await chrome.storage.session.remove("copyError").catch(() => {});
+  await chrome.action.setTitle({ ...tabTarget(tabId), title: "Copy URL settings" });
+  if (confirmation === "badge") await flashBadge("✓", tabId);
+  else await clearBadge(tabId);
+  return { copied: true, url, confirmation };
+}
 
-  return { copied, url, confirmation };
+export async function previewConfirmation(tabHint, confirmation) {
+  const tab = await resolveTab(tabHint);
+  if (typeof tab?.id !== "number") return false;
+  const result = await injectPageCopy(tab.id, "", true, { confirmation, preview: true });
+  return Boolean(result?.previewed);
 }
 
 async function resolveTab(tabHint) {
-  if (tabHint && typeof tabHint.id === "number") {
-    return tabHint;
-  }
-  const tabs = await chrome.tabs.query({
-    active: true,
-    lastFocusedWindow: true,
-  });
+  if (tabHint && typeof tabHint.id === "number") return tabHint;
+  const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   return tabs[0] ?? null;
 }
 
-async function injectPageCopy(tabId, urlHint, toastOnly) {
+async function injectPageCopy(tabId, urlHint, toastOnly, options) {
   try {
     const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      world: "ISOLATED",
-      func: runPageCopy,
-      args: [urlHint, toastOnly],
+      target: { tabId }, world: "ISOLATED", func: runPageCopy, args: [urlHint, toastOnly, options],
     });
     const result = results?.[0]?.result;
-    if (!result || typeof result !== "object") {
-      return {
-        url: "",
-        copied: false,
-        toasted: false,
-      };
-    }
-    return {
-      url: typeof result.url === "string" ? result.url : "",
-      copied: Boolean(result.copied),
-      toasted: Boolean(result.toasted),
-    };
+    return result && typeof result === "object" ? result : null;
   } catch {
     return null;
   }
 }
 
 function copyWithOffscreen(text) {
-  const job = offscreenQueue.then(
-    () => copyWithOffscreenExclusive(text),
-    () => copyWithOffscreenExclusive(text),
-  );
-  offscreenQueue = job.then(
-    () => undefined,
-    () => undefined,
-  );
+  const job = offscreenQueue.then(() => copyWithOffscreenExclusive(text), () => copyWithOffscreenExclusive(text));
+  offscreenQueue = job.then(() => undefined, () => undefined);
   return job;
 }
 
 async function copyWithOffscreenExclusive(text) {
-  await ensureOffscreenDocument();
   try {
-    const result = await chrome.runtime.sendMessage({
-      type: "copy",
-      target: "offscreen",
-      text,
-    });
+    await ensureOffscreenDocument();
+    const result = await chrome.runtime.sendMessage({ type: "copy", target: "offscreen", text });
     return Boolean(result?.ok);
-  } catch (error) {
-    console.warn("Copy URL Shortcut: clipboard write failed.", error);
+  } catch {
     return false;
   } finally {
-    try {
-      await chrome.offscreen.closeDocument();
-    } catch {
-      // Already closed.
-    }
+    try { await chrome.offscreen.closeDocument(); } catch { /* Already closed or creation failed. */ }
     offscreenCreate = null;
   }
 }
 
 async function ensureOffscreenDocument() {
-  const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_PATH);
   const existing = await chrome.runtime.getContexts({
-    contextTypes: ["OFFSCREEN_DOCUMENT"],
-    documentUrls: [offscreenUrl],
+    contextTypes: ["OFFSCREEN_DOCUMENT"], documentUrls: [chrome.runtime.getURL(OFFSCREEN_PATH)],
   });
-
-  if (!shouldCreateOffscreen(existing.length)) {
-    return;
+  if (!shouldCreateOffscreen(existing.length)) return;
+  if (!offscreenCreate) {
+    offscreenCreate = chrome.offscreen.createDocument({
+      url: OFFSCREEN_PATH, reasons: [chrome.offscreen.Reason.CLIPBOARD],
+      justification: "Write the current tab URL or Markdown link to the clipboard when page clipboard access is unavailable.",
+    });
   }
-
-  if (offscreenCreate) {
-    await offscreenCreate;
-    return;
-  }
-
-  offscreenCreate = chrome.offscreen.createDocument({
-    url: OFFSCREEN_PATH,
-    reasons: [chrome.offscreen.Reason.CLIPBOARD],
-    justification: "Write the active tab URL to the clipboard on pages that cannot be scripted.",
-  });
   await offscreenCreate;
 }
 
-async function flashBadge(text) {
-  await chrome.action.setBadgeBackgroundColor({ color: "#3A3A3C" });
-  if (chrome.action.setBadgeTextColor) {
-    await chrome.action.setBadgeTextColor({ color: "#FFFFFF" });
-  }
-  await chrome.action.setBadgeText({ text });
-  if (badgeTimer) {
-    clearTimeout(badgeTimer);
-  }
-  badgeTimer = setTimeout(() => {
-    chrome.action.setBadgeText({ text: "" });
-    badgeTimer = 0;
-  }, 1000);
+function tabTarget(tabId) {
+  return typeof tabId === "number" ? { tabId } : {};
+}
+
+async function clearBadge(tabId) {
+  clearTimeout(badgeTimers.get(tabId));
+  badgeTimers.delete(tabId);
+  await chrome.action.setBadgeText({ ...tabTarget(tabId), text: "" });
+}
+
+async function flashBadge(text, tabId, title) {
+  await clearBadge(tabId);
+  const target = tabTarget(tabId);
+  await chrome.action.setBadgeBackgroundColor({ ...target, color: "#3A3A3C" });
+  if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ ...target, color: "#FFFFFF" });
+  if (title) await chrome.action.setTitle({ ...target, title });
+  await chrome.action.setBadgeText({ ...target, text });
+  badgeTimers.set(tabId, setTimeout(() => {
+    chrome.action.setBadgeText({ ...target, text: "" }).catch(() => {});
+    badgeTimers.delete(tabId);
+  }, text === "!" ? 2800 : 1000));
 }

@@ -24,12 +24,13 @@ test("requests only the least-privilege permission set", () => {
     "scripting",
     "clipboardWrite",
     "offscreen",
+    "storage",
   ]);
 });
 
-test("does not request tabs or storage", () => {
+test("does not request broad tab or clipboard-read access", () => {
   assert.ok(!manifest.permissions.includes("tabs"));
-  assert.ok(!manifest.permissions.includes("storage"));
+  assert.ok(!manifest.permissions.includes("clipboardRead"));
 });
 
 test("declares a native copy-url command", () => {
@@ -37,9 +38,9 @@ test("declares a native copy-url command", () => {
   assert.equal(manifest.commands["copy-url"].suggested_key.default, "Ctrl+Shift+C");
 });
 
-test("has a toolbar action and no popup", () => {
+test("opens the settings popup from the toolbar", () => {
   assert.ok(manifest.action);
-  assert.equal(manifest.action.default_popup, undefined);
+  assert.equal(manifest.action.default_popup, "popup.html");
 });
 
 test("points the homepage at the public repository", () => {
@@ -50,7 +51,7 @@ test("points the homepage at the public repository", () => {
 });
 
 test("ships PNG icons for the toolbar and the store", async () => {
-  const sizes = ["16", "32", "48", "128"];
+  const sizes = ["16", "32", "48", "64", "128"];
   assert.deepEqual(Object.keys(manifest.icons), sizes);
   assert.deepEqual(Object.keys(manifest.action.default_icon), sizes);
   for (const size of sizes) {
@@ -59,4 +60,9 @@ test("ships PNG icons for the toolbar and the store", async () => {
     assert.equal(manifest.action.default_icon[size], relative);
     await access(new URL(`../${relative}`, import.meta.url));
   }
+});
+
+test("Markdown is optional and has no default shortcut", () => {
+  assert.equal(manifest.commands["copy-url-markdown"].suggested_key, undefined);
+  assert.ok(manifest.commands["copy-url-markdown"].description);
 });

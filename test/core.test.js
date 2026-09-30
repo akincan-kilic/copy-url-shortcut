@@ -80,3 +80,20 @@ test("creates an offscreen document only when none exists", () => {
   assert.equal(shouldCreateOffscreen(0), true);
   assert.equal(shouldCreateOffscreen(1), false);
 });
+
+const { markdownLink } = await import("../core.js");
+
+test("Markdown preserves URL parameters, fragments and parentheses", () => {
+  const url = "https://example.com/a(b)?utm_source=x&foo=bar#section";
+  assert.equal(markdownLink(url, "A useful page"), `[A useful page](<${url}>)`);
+});
+
+test("Markdown escapes page titles instead of allowing link or formatting injection", () => {
+  assert.equal(markdownLink("https://example.com/", "A [page] *with* `code` \\ <tag>"),
+    "[A \\[page\\] \\*with\\* \\`code\\` \\\\ \\<tag\\>](<https://example.com/>)");
+});
+
+test("Markdown handles multiline and missing titles", () => {
+  assert.equal(markdownLink("https://example.com/", "  First\nsecond  "), "[First second](<https://example.com/>)");
+  assert.equal(markdownLink("https://example.com/", ""), "[https://example.com/](<https://example.com/>)");
+});

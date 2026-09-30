@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Copy URL Shortcut",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Copy the current tab URL with one shortcut. Dormant until invoked.",
   "homepage_url": "https://github.com/akincan-kilic/copy-url-shortcut",
   "minimum_chrome_version": "116",
@@ -9,16 +9,19 @@
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "128": "icons/icon128.png",
+    "64": "icons/icon64.png"
   },
   "action": {
-    "default_title": "Copy URL",
+    "default_title": "Copy URL settings",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
       "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
+      "128": "icons/icon128.png",
+      "64": "icons/icon64.png"
+    },
+    "default_popup": "popup.html"
   },
   "background": {
     "service_worker": "service-worker.js",
@@ -28,7 +31,8 @@
     "activeTab",
     "scripting",
     "clipboardWrite",
-    "offscreen"
+    "offscreen",
+    "storage"
   ],
   "commands": {
     "copy-url": {
@@ -37,6 +41,9 @@
         "mac": "Command+Shift+C"
       },
       "description": "Copy the current tab URL"
+    },
+    "copy-url-markdown": {
+      "description": "Copy the current page as a Markdown link"
     }
   }
 }
